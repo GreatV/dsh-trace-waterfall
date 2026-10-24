@@ -1,0 +1,6 @@
+# Relative plugin paths are anchored to this overlay.
+- id: ui-trajectory
+  disabled: true
+- insert:
+    - id: trace-waterfall
+      name: ./lib/index.js

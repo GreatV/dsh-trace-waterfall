@@ -1,0 +1,6 @@
+# This bundle replaces the existing trajectory tab and its data projection.
+- id: ui-trajectory
+  disabled: true
+- insert:
+    - id: trace-waterfall
+      name: dsh-trace-waterfall

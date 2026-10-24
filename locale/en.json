@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Trace waterfall",
+    "description": "Inspect model requests, parallel tool calls, timing, tokens, and errors on one live timeline. Replaces the trajectory view."
+  }
+}
