@@ -1,5 +1,5 @@
 /** Session-bound waterfall with a compressed time axis and a virtualized event ledger. */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, MouseEvent } from 'react'
 import type { ConvViewProps, MessageImageLoader } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
@@ -9,10 +9,11 @@ import { buildTrace, cacheRate, compactDuration, compactTokens, visibleRows } fr
 import type { TraceKey, TraceTranslate } from './locales.ts'
 import { SpanDetails, SpanPopover, type PopoverAnchor } from './TraceDetails.tsx'
 import { AXIS_HEIGHT, Handoffs, Overview, ROW_HEIGHT, TraceRowView } from './TraceTimeline.tsx'
-import { clampWindow, compositeSegments, createTimeAxis, focusSpan, leafSegments, visibleGaps, zoomWindow, type TimeWindow } from './timeline.ts'
+import { clampWindow, createSegmentCache, createTimeAxis, focusSpan, visibleGaps, zoomWindow, type TimeWindow } from './timeline.ts'
 import styles from './waterfall.css'
 import { TraceIcon } from './icons.tsx'
 import { timelineTicks } from './timeline-layout.ts'
+import { followsTail, mayFollowTail, nextLiveAxisEnd } from './live-view.ts'
 
 export interface TraceInjected { loadOlder: () => Promise<void>; loadImage?: MessageImageLoader }
 type Props = Pick<ConvViewProps, 'useTrajectory' | 'useSession' | 'viewRequest' | 'completeViewRequest'>
@@ -55,6 +56,9 @@ export function TraceView({ useTrajectory, useSession, useProjection, loadOlder,
   const search = useRef<HTMLInputElement>(null), scroller = useRef<HTMLDivElement>(null), root = useRef<HTMLElement>(null)
   const tickTrack = useRef<HTMLDivElement>(null)
   const resize = useRef<{ x: number; width: number } | null>(null)
+  const following = useRef(false), scrollInitialized = useRef(false), lastScrollTop = useRef(0)
+  const previousRowCount = useRef(0)
+  const liveAxis = useRef<{ start: number; end: number } | null>(null)
   useEffect(() => {
     if (!model.running) return
     const timer = setInterval(() => setNow(Date.now()), 100)
@@ -74,21 +78,44 @@ export function TraceView({ useTrajectory, useSession, useProjection, loadOlder,
   const focusId = requestedId && viewRequest !== dismissedRequest && model.byId.has(requestedId) ? requestedId : null
   const selected = model.byId.get(focusId ?? selection ?? '')
   const detail = !!selected && (focusId !== null || mode === 'detail')
+  const followAllowed = mayFollowTail(query, errorsOnly, range !== null, !!selected)
   const rows = useMemo(() => visibleRows(model, collapsed, query, errorsOnly, t), [model, collapsed, query, errorsOnly, t])
+  useLayoutEffect(() => {
+    const pane = scroller.current
+    if (!pane || loading || !rows.length) return
+    const appended = rows.length > previousRowCount.current
+    const initial = !scrollInitialized.current
+    if (initial) { scrollInitialized.current = true; following.current = model.running && followAllowed }
+    if (!followAllowed) following.current = false
+    if (following.current && (initial || appended)) {
+      pane.scrollTop = Math.max(0, pane.scrollHeight - pane.clientHeight)
+      lastScrollTop.current = pane.scrollTop
+      setScrollTop(pane.scrollTop)
+    }
+    previousRowCount.current = rows.length
+  }, [rows, loading, model.running, followAllowed])
   useEffect(() => {
     if (!scrollTarget || !scroller.current) return
     const index = rows.findIndex(row => row.span.id === scrollTarget)
     if (index >= 0) { scroller.current.scrollTop = index * ROW_HEIGHT; setScrollTop(index * ROW_HEIGHT) }
     setScrollTarget(null)
   }, [rows, scrollTarget])
-  const axis = useMemo(() => createTimeAxis(model, now), [model, now])
+  const axisNow = useMemo(() => {
+    if (!model.running || range) { liveAxis.current = null; return model.running ? now : model.end }
+    const end = Math.max(model.end, now)
+    const previous = liveAxis.current?.start === model.start ? liveAxis.current.end : undefined
+    if (previous !== undefined && end <= previous) return previous
+    const current = createTimeAxis(model, now)
+    const extended = nextLiveAxisEnd(previous, current.end, current.length, trackWidth)
+    liveAxis.current = { start: model.start, end: extended }
+    return extended
+  }, [model, now, range, trackWidth])
+  const axis = useMemo(() => createTimeAxis(model, axisNow), [model, axisNow])
   // Wall time keeps the chosen viewport stable when older history is prepended.
-  const window = range ? clampWindow({ from: axis.project(range.from), to: axis.project(range.to) }, axis.length) : { from: 0, to: axis.length }
+  const window = useMemo(() => range ? clampWindow({ from: axis.project(range.from), to: axis.project(range.to) }, axis.length)
+    : { from: 0, to: axis.length }, [axis, range])
   const zoom = axis.length / (window.to - window.from)
-  const segmentMap = useMemo(() => {
-    const descendants = (span: TraceSpan): TraceSpan[] => (model.children.get(span.id) ?? []).flatMap(child => [child, ...descendants(child)])
-    return new Map(model.spans.map(span => [span.id, model.children.has(span.id) ? compositeSegments(span, descendants(span), now) : leafSegments(span, now)]))
-  }, [model, now])
+  const segmentsFor = useMemo(() => createSegmentCache(model), [model])
   const visibleCount = Math.ceil(height / ROW_HEIGHT) + 16
   const firstVisible = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT))
   const startRow = Math.min(Math.max(0, rows.length - visibleCount), Math.max(0, firstVisible - 8))
@@ -98,12 +125,13 @@ export function TraceView({ useTrajectory, useSession, useProjection, loadOlder,
   const sticky = stickyIndex >= 0 && stickyIndex < firstVisible ? rows[stickyIndex] : undefined
   const branches = [...model.children.keys()]
   const allCollapsed = branches.length > 0 && branches.every(key => collapsed.has(key))
-  function resetScroll() { if (scroller.current) scroller.current.scrollTop = 0; setScrollTop(0) }
+  function resetScroll() { following.current = false; if (scroller.current) scroller.current.scrollTop = 0; lastScrollTop.current = 0; setScrollTop(0) }
   function closeDetails() {
     setSelection(null); setDismissedRequest(viewRequest)
     if (requestedId) completeViewRequest()
   }
   function changeWindow(value: TimeWindow) {
+    following.current = false
     const clamped = clampWindow(value, axis.length)
     setRange({ from: axis.unproject(clamped.from), to: axis.unproject(clamped.to) })
   }
@@ -117,6 +145,7 @@ export function TraceView({ useTrajectory, useSession, useProjection, loadOlder,
     changeWindow(zoomWindow(window, factor, axis.length, center))
   }
   function inspect(event: MouseEvent<HTMLButtonElement>, span: TraceSpan) {
+    following.current = false
     const parent = root.current?.getBoundingClientRect(), target = event.currentTarget.getBoundingClientRect()
     if (parent) {
       const x = event.currentTarget.classList.contains('tw-track') && event.detail > 0 ? event.clientX : target.right
@@ -138,12 +167,12 @@ export function TraceView({ useTrajectory, useSession, useProjection, loadOlder,
     return () => document.removeEventListener('pointerdown', dismiss)
   }, [selected, detail])
   const renderRow = (row: typeof rows[number], index: number, isSticky = false) => <TraceRowView key={row.span.id} row={row} index={index} axis={axis} window={window}
-    segments={segmentMap.get(row.span.id) ?? []} trackWidth={trackWidth} now={now} t={t} query={query} selected={selected?.id === row.span.id} sticky={isSticky}
+    segments={segmentsFor(row.span, now)} trackWidth={trackWidth} now={now} t={t} query={query} selected={selected?.id === row.span.id} sticky={isSticky}
     expanded={query.trim() !== '' || errorsOnly || !collapsed.has(row.span.id)} inspect={inspect} focus={() => focus(row.span)}
     collapse={() => setCollapsed(previous => { const next = new Set(previous); if (next.has(row.span.id)) next.delete(row.span.id); else next.add(row.span.id); return next })} />
-  const gaps = visibleGaps(axis, window)
+  const gaps = useMemo(() => visibleGaps(axis, window), [axis, window])
   const tickOrigin = range ? axis.unproject(window.from) : model.start
-  const ticks = timelineTicks(axis, window, tickOrigin, trackWidth)
+  const ticks = useMemo(() => timelineTicks(axis, window, tickOrigin, trackWidth), [axis, window, tickOrigin, trackWidth])
   const shortcut = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? 'Cmd F' : 'Ctrl F'
   return <section className="tw-root" ref={root} data-conversation-composer-overlay="" aria-label={t('timeline')}
     style={labelWidth === null ? undefined : { '--tw-label-width': `${labelWidth}px` } as CSSProperties}
@@ -159,7 +188,7 @@ export function TraceView({ useTrajectory, useSession, useProjection, loadOlder,
     </header>
     <div className="tw-toolbar"><div className="tw-filters"><button aria-pressed={!errorsOnly} onClick={() => { setErrorsOnly(false); resetScroll() }}>{t('all')}</button>
       <button aria-pressed={errorsOnly} onClick={() => { setErrorsOnly(true); setRange(null); resetScroll() }}>{t('onlyErrors')}{model.metrics.errors > 0 && <span>{model.metrics.errors}</span>}</button></div>
-      {hasMore && <button className="tw-load" disabled={loading} onClick={async () => { setHistoryError(null); try { await loadOlder() } catch (error) { setHistoryError(error instanceof Error ? error.message : String(error)) } }}>{t(loading ? 'loading' : 'loadOlder')}</button>}
+      {hasMore && <button className="tw-load" disabled={loading} onClick={async () => { following.current = false; setHistoryError(null); try { await loadOlder() } catch (error) { setHistoryError(error instanceof Error ? error.message : String(error)) } }}>{t(loading ? 'loading' : 'loadOlder')}</button>}
       {range && <span className="tw-range-label">{t('rangeStart', { time: new Date(tickOrigin).toLocaleTimeString() })}</span>}
       <div className="tw-controls"><button onClick={() => { setCollapsed(allCollapsed ? new Set() : new Set(branches)); resetScroll() }} disabled={!branches.length}>{t(allCollapsed ? 'expandAll' : 'collapseAll')}</button>
         <span className="tw-divider" /><button aria-label={t('zoomOut')} title={t('zoomOut')} disabled={zoom <= 1.001} onClick={() => zoomBy(.5)}><TraceIcon name="minus" /></button>
@@ -168,7 +197,14 @@ export function TraceView({ useTrajectory, useSession, useProjection, loadOlder,
     <Overview model={model} axis={axis} window={window} change={changeWindow} reset={() => setRange(null)} t={t} now={now} />
     {(openError || historyError) && <div role="alert" className="tw-history-error">{t('historyError', { reason: openError?.message ?? historyError ?? '' })}</div>}
     <div className="tw-main"><div className="tw-chart">
-      <div className="tw-scroll" ref={scroller} onScroll={event => { setScrollTop(event.currentTarget.scrollTop); if (mode === 'popover') setSelection(null) }}>
+      <div className="tw-scroll" ref={scroller} onWheel={event => { if (event.deltaY < 0) following.current = false }}
+        onScroll={event => {
+          const pane = event.currentTarget
+          following.current = followsTail(pane.scrollTop, lastScrollTop.current, pane.scrollHeight, pane.clientHeight, followAllowed)
+          lastScrollTop.current = pane.scrollTop
+          setScrollTop(pane.scrollTop)
+          if (mode === 'popover') setSelection(null)
+        }}>
         <div className="tw-axis"><div className="tw-axis-label">{t('steps')}<span>{rows.length}</span>
           <div className="tw-resizer" role="separator" tabIndex={0} aria-orientation="vertical" aria-label={t('resizeLabels')} aria-valuenow={labelWidth ?? 560}
             onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); setLabelWidth(value => Math.max(260, Math.min((root.current?.clientWidth ?? 1000) - 230, (value ?? 560) + (event.key === 'ArrowLeft' ? -24 : 24)))) } }}

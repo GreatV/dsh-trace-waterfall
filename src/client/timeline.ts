@@ -40,7 +40,15 @@ export function createTimeAxis(model: TraceModel, now = model.end, idleThreshold
   }
   append(cursor, end, end - cursor > idleThreshold)
   const interpolate = (value: number, reverse: boolean) => {
-    const piece = intervals.find(part => value <= (reverse ? part.to : part.end)) ?? intervals.at(-1)
+    // Lower bound preserves the original left-hand piece at shared boundaries.
+    let low = 0, high = intervals.length - 1
+    if (Number.isNaN(value)) low = high
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      if (value <= (reverse ? intervals[middle]!.to : intervals[middle]!.end)) high = middle
+      else low = middle + 1
+    }
+    const piece = intervals[low]
     if (!piece) return reverse ? model.start : 0
     const [a, b, c, d] = reverse ? [piece.from, piece.to, piece.start, piece.end] : [piece.start, piece.end, piece.from, piece.to]
     return c + (Math.min(b, Math.max(a, value)) - a) / (b - a) * (d - c)
@@ -98,17 +106,50 @@ export function compositeSegments(parent: TraceSpan, children: readonly TraceSpa
   const start = parent.start ?? parent.anchor, end = parent.end ?? now
   const activity = children.flatMap(child => leafSegments(child, now)).filter(part => part.end > part.start && part.kind !== 'input')
   const points = [...new Set([start, end, ...activity.flatMap(part => [Math.max(start, part.start), Math.min(end, part.end)])])].filter(time => time >= start && time <= end).sort((a, b) => a - b)
-  const priority: Record<ActivityKind, number> = { error: 5, nested: 4, llm: 3, tool: 2, waiting: 1, input: 0 }
+  const priority: readonly ActivityKind[] = ['error', 'nested', 'llm', 'tool', 'waiting', 'input']
+  const events: { at: number; kind: ActivityKind; delta: number }[] = []
+  for (const part of activity) {
+    const from = Math.max(start, part.start), to = Math.min(end, part.end)
+    if (from >= to) continue
+    events.push({ at: from, kind: part.kind, delta: 1 }, { at: to, kind: part.kind, delta: -1 })
+  }
+  events.sort((a, b) => a.at - b.at)
+  const active: Record<ActivityKind, number> = { error: 0, nested: 0, llm: 0, tool: 0, waiting: 0, input: 0 }
   const result: ActivitySegment[] = []
+  let next = 0
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i]!, b = points[i + 1]!
-    const active = activity.filter(part => part.start < b && part.end > a).sort((left, right) => priority[right.kind] - priority[left.kind])[0]
-    const kind = active?.kind ?? 'waiting'
+    // Apply both starts and ends at a: intervals are closed on the left, open on the right.
+    while (next < events.length && events[next]!.at <= a) {
+      const event = events[next++]!
+      active[event.kind] += event.delta
+    }
+    const kind = priority.find(candidate => active[candidate] > 0) ?? 'waiting'
     const previous = result.at(-1)
     if (previous?.kind === kind && previous.end === a) previous.end = b
     else result.push({ start: a, end: b, kind })
   }
   return result
+}
+
+/** Cache completed branches across clock ticks; evaluate only requested (visible) rows. */
+export function createSegmentCache(model: TraceModel): (span: TraceSpan, now: number) => ActivitySegment[] {
+  const cache = new Map<TraceSpan, { children: TraceSpan[]; live: boolean; now: number; segments: ActivitySegment[] }>()
+  return (span, now) => {
+    let entry = cache.get(span)
+    if (!entry) {
+      const children: TraceSpan[] = []
+      const visit = (parent: TraceSpan) => { for (const child of model.children.get(parent.id) ?? []) { children.push(child); visit(child) } }
+      visit(span)
+      entry = { children, live: span.end === null || children.some(child => child.end === null), now: NaN, segments: [] }
+      cache.set(span, entry)
+    }
+    if (Number.isNaN(entry.now) || entry.live && entry.now !== now) {
+      entry.segments = entry.children.length ? compositeSegments(span, entry.children, now) : leafSegments(span, now)
+      entry.now = now
+    }
+    return entry.segments
+  }
 }
 
 /** Clip a real interval into the visible compressed domain. */

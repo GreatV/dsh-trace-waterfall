@@ -10,29 +10,39 @@ const TICK_STEPS = [
   ...[1, 2, 3, 6, 12].map(hours => hours * 3_600_000),
 ]
 
+export function timelineStep(length: number, width: number): number {
+  const rough = length / Math.max(1, Math.floor(width / 110))
+  return TICK_STEPS.find(value => value >= rough) ?? Math.ceil(rough / 43_200_000) * 43_200_000
+}
+
 /** Use clock-friendly steps with a shared unit, then project real time through the compressed axis. */
 export function timelineTicks(axis: TimeAxis, window: TimeWindow, origin: number, width: number): AxisTick[] {
-  const rough = (window.to - window.from) / Math.max(1, Math.floor(width / 110))
-  const step = TICK_STEPS.find(value => value >= rough) ?? Math.ceil(rough / 43_200_000) * 43_200_000
+  const step = timelineStep(window.to - window.from, width)
   const unit = step >= 3_600_000 ? 3_600_000 : step >= 60_000 ? 60_000 : 1000
   const suffix = unit === 1000 ? 's' : unit === 60_000 ? 'm' : 'h'
   const firstGapEnd = axis.intervals.find(part => part.gap && part.end > origin)?.end
   const offsets = new Set<number>()
   // The focused origin can precede the first event by a few milliseconds.
-  if (axis.project(origin) >= window.from && axis.project(origin) <= window.to) offsets.add(0)
+  const originPosition = axis.project(origin)
+  if (originPosition >= window.from && originPosition <= window.to) offsets.add(0)
+  const visibleStart = axis.unproject(window.from), visibleEnd = axis.unproject(window.to)
   for (const part of axis.intervals) {
     if (part.gap || part.to < window.from || part.from > window.to) continue
-    const from = Math.max(part.start, axis.unproject(window.from)) - origin
-    const to = Math.min(part.end, axis.unproject(window.to)) - origin
+    const from = Math.max(part.start, visibleStart) - origin
+    const to = Math.min(part.end, visibleEnd) - origin
     for (let offset = Math.ceil(from / step) * step; offset <= to; offset += step) offsets.add(offset)
   }
   let previous = -Infinity
+  const labels = new Set<string>()
   return [...offsets].sort((a, b) => a - b).flatMap(offset => {
     const left = (axis.project(origin + offset) - window.from) / (window.to - window.from) * 100
     if ((left - previous) * width / 100 < 64) return []
-    previous = left
     const hoursAfterGap = offset >= 7_200_000 && firstGapEnd !== undefined && origin + offset >= firstGapEnd
-    return [{ left, label: offset === 0 ? '0s' : hoursAfterGap ? compactDuration(offset) : `${offset / unit}${suffix}` }]
+    const label = offset === 0 ? '0s' : hoursAfterGap ? compactDuration(offset) : `${offset / unit}${suffix}`
+    if (labels.has(label)) return []
+    labels.add(label)
+    previous = left
+    return [{ left, label }]
   })
 }
 

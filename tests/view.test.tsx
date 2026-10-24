@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -22,6 +22,59 @@ function props(snapshot: TrajectorySnapshot = fixture(), overrides: Partial<Comp
 }
 
 describe('waterfall interactions', () => {
+  it('starts live at the tail, follows appends, and respects scrolling, search and popover inspection', () => {
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(120)
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return 30 + Number.parseFloat(this.querySelector<HTMLElement>('.tw-rows')?.style.height ?? '0')
+    })
+    const snapshot = (count: number): TrajectorySnapshot => ({ ...EMPTY_TRAJECTORY_SNAPSHOT,
+      eventNodes: Array.from({ length: count }, (_, i) => tool(`done-${i}`, `done_${i}`, i * 100, i * 100 + 40)),
+      runningCalls: [{ phase: 'start', callId: 'live', name: 'live_call', time: BASE + count * 100,
+        turn: 1, step: 1, argsRaw: '{}', args: tool('args', 'bash', 0, 1).args, subCalls: [] }] })
+    const view = render(<TraceView {...props(snapshot(80))} />)
+    const pane = document.querySelector<HTMLElement>('.tw-scroll')!
+    const bottom = () => pane.scrollHeight - pane.clientHeight
+    expect(pane.scrollTop).toBe(bottom())
+    view.rerender(<TraceView {...props(snapshot(81))} />)
+    expect(pane.scrollTop).toBe(bottom())
+    fireEvent.scroll(pane, { target: { scrollTop: 100 } })
+    view.rerender(<TraceView {...props(snapshot(82))} />)
+    expect(pane.scrollTop).toBe(100)
+    fireEvent.scroll(pane, { target: { scrollTop: bottom() } })
+    view.rerender(<TraceView {...props(snapshot(83))} />)
+    expect(pane.scrollTop).toBe(bottom())
+    fireEvent.click(screen.getAllByRole('button', { name: 'Inspect live_call' })[0]!)
+    const inspectingTop = pane.scrollTop
+    view.rerender(<TraceView {...props(snapshot(84))} />)
+    expect(pane.scrollTop).toBe(inspectingTop)
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'Escape' })
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'done' } })
+    view.rerender(<TraceView {...props(snapshot(85))} />)
+    expect(pane.scrollTop).toBe(0)
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: '' } })
+    view.rerender(<TraceView {...props(snapshot(86))} />)
+    expect(pane.scrollTop).toBe(0)
+  })
+
+  it('keeps history at the top and freezes completed bar widths inside a live axis block', () => {
+    vi.useFakeTimers(); vi.setSystemTime(BASE + 60_000)
+    const history: TrajectorySnapshot = { ...EMPTY_TRAJECTORY_SNAPSHOT, eventNodes: [tool('done', 'read_file', 0, 1000)] }
+    const view = render(<TraceView {...props(history)} />)
+    expect(document.querySelector<HTMLElement>('.tw-scroll')!.scrollTop).toBe(0)
+    const running = { ...history, runningCalls: [{ phase: 'start' as const, callId: 'live', name: 'bash', time: BASE + 1000,
+      turn: 1, step: 1, argsRaw: '{}', args: tool('args', 'bash', 0, 1).args, subCalls: [] }] }
+    view.rerender(<TraceView {...props(running)} />)
+    const width = () => screen.getAllByRole('button', { name: 'Inspect read_file' })[0]!.closest('.tw-row')!.querySelector<HTMLElement>('.tw-leaf-bar')!.style.width
+    const first = width()
+    act(() => { vi.advanceTimersByTime(500) })
+    expect(width()).toBe(first)
+    act(() => { vi.advanceTimersByTime(15_000) })
+    expect(Number.parseFloat(width())).toBeLessThan(Number.parseFloat(first))
+    view.rerender(<TraceView {...props(history)} />)
+    expect(width()).toBe('100%')
+  })
+
   it('opens span content, filters nested results, and clears an empty search', () => {
     render(<TraceView {...props()} />)
     fireEvent.click(screen.getAllByRole('button', { name: 'Inspect read_file' })[0]!)

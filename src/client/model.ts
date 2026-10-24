@@ -84,7 +84,10 @@ function usageOf(value: unknown): TraceUsage | undefined {
 }
 
 /** Request.prompt is a system/config/tool snapshot, not the conversation input. */
+const inputBatches = new WeakMap<TrajectorySnapshot['eventNodes'], { requests: TrajectorySnapshot['requests']; value: ReadonlyMap<number, readonly TraceInput[]> }>()
 function requestInputs(snapshot: TrajectorySnapshot, assistants: ReadonlyMap<string, AssistantMessageNode>): ReadonlyMap<number, readonly TraceInput[]> {
+  const cached = inputBatches.get(snapshot.eventNodes)
+  if (cached?.requests === snapshot.requests) return cached.value
   const inputs = snapshot.eventNodes.flatMap(node => {
     if (node.kind !== 'user' && node.kind !== 'steering' && node.kind !== 'context' && node.kind !== 'tool-result') return []
     const value: TraceInput = { kind: node.kind === 'tool-result' ? 'tool' : node.kind === 'context' ? 'context' : 'message',
@@ -94,18 +97,26 @@ function requestInputs(snapshot: TrajectorySnapshot, assistants: ReadonlyMap<str
   const requests = snapshot.requests.filter((request): request is Extract<RequestView, { purpose: 'assistant' }> => request.purpose === 'assistant')
     .sort((a, b) => a.startSeq - b.startSeq)
   const result = new Map<number, readonly TraceInput[]>()
+  const assistantSeqs = [...assistants.values()].map(node => node.seq).sort((a, b) => a - b)
   let consumed = -Infinity
+  let inputIndex = 0, assistantIndex = 0
   for (const [index, request] of requests.entries()) {
     const assistant = assistants.get(`${request.turn}:${request.step}`)
     // Inputs can be logged after step/start while the request is being prepared.
     // The assistant result closes that input batch; its own tools belong to the next request.
     const upper = request.resultSeq ?? assistant?.seq ?? requests[index + 1]?.startSeq ?? Infinity
-    for (const previous of assistants.values()) if (previous.seq < request.startSeq) consumed = Math.max(consumed, previous.seq)
-    const added = inputs.filter(input => input.seq > consumed && input.seq < upper
-      && (request.completedAt === null || input.time <= request.completedAt))
-    result.set(request.startSeq, added.map(input => input.value))
-    consumed = Math.max(consumed, request.resultSeq ?? assistant?.seq ?? request.startSeq, added.at(-1)?.seq ?? -Infinity)
+    while (assistantIndex < assistantSeqs.length && assistantSeqs[assistantIndex]! < request.startSeq) consumed = Math.max(consumed, assistantSeqs[assistantIndex++]!)
+    while (inputIndex < inputs.length && inputs[inputIndex]!.seq <= consumed) inputIndex++
+    const added: TraceInput[] = []
+    let lastAdded = -Infinity
+    for (let i = inputIndex; i < inputs.length && inputs[i]!.seq < upper; i++) {
+      const input = inputs[i]!
+      if (request.completedAt === null || input.time <= request.completedAt) { added.push(input.value); lastAdded = input.seq }
+    }
+    result.set(request.startSeq, added)
+    consumed = Math.max(consumed, request.resultSeq ?? assistant?.seq ?? request.startSeq, lastAdded)
   }
+  inputBatches.set(snapshot.eventNodes, { requests: snapshot.requests, value: result })
   return result
 }
 
@@ -180,8 +191,11 @@ export function buildTrace(snapshot: TrajectorySnapshot): TraceModel {
     }
   }
   for (const call of snapshot.runningCalls) addTool(call)
+  const eventIds = new Set(spans.map(span => span.id))
   for (const prompt of snapshot.systemPrompts ?? []) {
-    if (!spans.some(span => span.id === `event:${prompt.seq}`)) spans.push({
+    if (eventIds.has(`event:${prompt.seq}`)) continue
+    eventIds.add(`event:${prompt.seq}`)
+    spans.push({
       id: `event:${prompt.seq}`, kind: 'system', start: prompt.time, end: prompt.time,
       anchor: prompt.time, status: 'complete', input: prompt.text,
     })
@@ -189,6 +203,7 @@ export function buildTrace(snapshot: TrajectorySnapshot): TraceModel {
   const metrics: TraceModel['metrics'] = { llm: 0, tools: 0, errors: 0, tokens: null, cacheRate: null }
   const usage: TraceUsage = {}
   const turns = new Map<number, TraceSpan>()
+  const turnInputs = new Map<number, TraceSpan>(), turnOutputs = new Map<number, TraceSpan>()
   let start = Infinity
   let end = -Infinity
   for (const span of spans) {
@@ -212,13 +227,15 @@ export function buildTrace(snapshot: TrajectorySnapshot): TraceModel {
     }
     addUsage(root.usage!, span.usage)
     if (span.status === 'error') root.errorCount = (root.errorCount ?? 0) + 1
+    // Match stable anchor sorting: first input wins ties, last model output wins ties.
+    if ((span.kind === 'message' || span.kind === 'context') && (!turnInputs.has(span.turn) || span.anchor < turnInputs.get(span.turn)!.anchor)) turnInputs.set(span.turn, span)
+    if (span.kind === 'llm' && (!turnOutputs.has(span.turn) || span.anchor >= turnOutputs.get(span.turn)!.anchor)) turnOutputs.set(span.turn, span)
   }
   metrics.tokens = totalTokens(usage)
   metrics.cacheRate = cacheRate(usage)
   for (const root of turns.values()) {
-    const members = spans.filter(span => span.turn === root.turn).sort((a, b) => a.anchor - b.anchor)
-    root.input = members.find(span => span.kind === 'message' || span.kind === 'context')?.input
-    root.output = members.filter(span => span.kind === 'llm').at(-1)?.output
+    root.input = turnInputs.get(root.turn!)?.input
+    root.output = turnOutputs.get(root.turn!)?.output
   }
   for (const location of snapshot.eventLocations.values()) {
     if (location.kind !== 'step' && location.kind !== 'turn') continue
@@ -239,6 +256,7 @@ export function buildTrace(snapshot: TrajectorySnapshot): TraceModel {
   const children = new Map<string, TraceSpan[]>()
   const roots: TraceSpan[] = []
   for (const span of spans) {
+    searchIndex(span)
     if (span.parentId && byId.has(span.parentId)) {
       const siblings = children.get(span.parentId) ?? []
       siblings.push(span)
@@ -256,28 +274,97 @@ export function spanLabel(span: TraceSpan, t: TraceTranslate): string {
 }
 
 /** JSON details are escaped by React and are never interpreted as markup. */
+const payloadStrings = new WeakMap<object, string>()
 export function payloadText(value: unknown): string {
   if (value === undefined) return ''
   if (typeof value === 'string') {
     try { return JSON.stringify(JSON.parse(value), null, 2) }
     catch { return value }
   }
+  if (value !== null && typeof value === 'object') {
+    let text = payloadStrings.get(value)
+    if (text === undefined) { text = JSON.stringify(value, null, 2) ?? ''; payloadStrings.set(value, text) }
+    return text
+  }
   return JSON.stringify(value, null, 2) ?? ''
 }
 
 export interface TraceRow { span: TraceSpan; depth: number; hasChildren: boolean }
+
+// Snapshots are immutable. Weak keys release text with its records; shared prompts are
+// serialized once without copying the same large string into thousands of span indexes.
+const payloadSearch = new WeakMap<object, string>()
+interface SearchIndex { fields: readonly string[]; id: string; label?: string; labelText?: string }
+const spanSearch = new WeakMap<TraceSpan, SearchIndex>()
+function searchPayload(value: unknown): string {
+  if (value !== null && typeof value === 'object') {
+    let text = payloadSearch.get(value)
+    if (text === undefined) { text = payloadText(value).toLocaleLowerCase(); payloadSearch.set(value, text) }
+    return text
+  }
+  return payloadText(value).toLocaleLowerCase()
+}
+function searchIndex(span: TraceSpan): SearchIndex {
+  let index = spanSearch.get(span)
+  if (!index) {
+    const fields = [span.model ?? '', span.provider ?? '', span.error ?? ''].map(text => text.toLocaleLowerCase())
+      .concat([searchPayload(span.newInput), searchPayload(span.input), searchPayload(span.output)])
+    index = { fields, id: span.id.toLocaleLowerCase() }
+    spanSearch.set(span, index)
+  }
+  return index
+}
+
+const modelSearch = new WeakMap<TraceModel, { term: string; locale: string; matched: readonly TraceSpan[]; ids: Map<string, TraceSpan[]> }>()
+function matchingSpans(model: TraceModel, term: string, t: TraceTranslate): readonly TraceSpan[] {
+  const locale = [t('turn', { number: 0 }), ...(['llm', 'tool', 'compaction', 'message', 'context', 'system'] as const).map(kind => t(kind))].join('\0')
+  let cached = modelSearch.get(model)
+  if (!cached) {
+    const ids = new Map<string, TraceSpan[]>()
+    for (const span of model.spans) {
+      const id = searchIndex(span).id, values = ids.get(id) ?? []
+      values.push(span); ids.set(id, values)
+    }
+    cached = { term: '', locale, matched: model.spans, ids }
+    modelSearch.set(model, cached)
+  }
+  const candidates = cached.locale === locale && term.startsWith(cached.term) ? cached.matched : model.spans
+  const matches = new Map<string, boolean>()
+  const includes = (text: string) => {
+    let match = matches.get(text)
+    if (match === undefined) { match = text.includes(term); matches.set(text, match) }
+    return match
+  }
+  const matched: TraceSpan[] = []
+  for (const span of candidates) {
+    const index = searchIndex(span), label = spanLabel(span, t)
+    if (index.label !== label) { index.label = label; index.labelText = label.toLocaleLowerCase() }
+    const fields = [index.labelText!, ...index.fields]
+    let match = fields.some(includes)
+    // Preserve matches crossing the spaces in the original joined text, including empty fields.
+    if (!match && term.includes(' ')) {
+      let tail = ''
+      for (const [index, field] of fields.entries()) {
+        if (index && (tail + ' ' + field.slice(0, term.length - 1)).includes(term)) { match = true; break }
+        tail = (tail + (index ? ' ' : '') + field.slice(-(term.length - 1))).slice(-(term.length - 1))
+      }
+    }
+    if (match || index.id === term) matched.push(span)
+  }
+  // Exact opaque IDs can become matches only on the final character; do not lose them
+  // when narrowing a prefix that deliberately did not match partial identifiers.
+  for (const span of cached.ids.get(term) ?? []) if (!matched.includes(span)) matched.push(span)
+  cached.term = term; cached.locale = locale; cached.matched = matched
+  return matched
+}
+
 /** Keep matched descendants reachable, even through collapsed ancestors. */
 export function visibleRows(model: TraceModel, collapsed: ReadonlySet<string>, query: string, errorsOnly: boolean, t: TraceTranslate): TraceRow[] {
   const term = query.trim().toLocaleLowerCase()
   const filtering = term !== '' || errorsOnly
   const included = new Set<string>()
-  if (filtering) for (const span of model.spans) {
+  if (filtering) for (const span of term ? matchingSpans(model, term, t) : model.spans) {
     if (errorsOnly && (span.status !== 'error' || span.kind === 'turn')) continue
-    if (term) {
-      const text = [spanLabel(span, t), span.model, span.provider, span.error,
-        payloadText(span.newInput), payloadText(span.input), payloadText(span.output)].join(' ').toLocaleLowerCase()
-      if (!text.includes(term) && span.id.toLocaleLowerCase() !== term) continue
-    }
     let current: TraceSpan | undefined = span
     while (current && !included.has(current.id)) {
       included.add(current.id)

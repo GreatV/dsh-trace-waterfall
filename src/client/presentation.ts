@@ -73,9 +73,28 @@ export function spanSummary(span: TraceSpan, query = ''): { input: string; outpu
 }
 
 /** Reveal a matching excerpt even when the match is deep inside a long command or result. */
+const excerptCache = new Map<string, { normalized: string; lower: string }>()
+let excerptCharacters = 0
 export function excerpt(text: string, query: string, limit = 240): string {
-  const normalized = text.replace(/\s+/g, ' ')
-  const index = query.trim() ? normalized.toLocaleLowerCase().indexOf(query.trim().toLocaleLowerCase()) : -1
+  let cached = excerptCache.get(text)
+  if (!cached) {
+    const normalized = text.replace(/\s+/g, ' ')
+    cached = { normalized, lower: normalized.toLocaleLowerCase() }
+    // Reuse common prompt excerpts across rows/keystrokes without retaining an unbounded session.
+    const size = text.length + cached.normalized.length + cached.lower.length
+    if (size <= 1_000_000) {
+      while (excerptCache.size && (excerptCache.size >= 256 || excerptCharacters + size > 1_000_000)) {
+        const oldest = excerptCache.keys().next().value!
+        const value = excerptCache.get(oldest)!
+        excerptCharacters -= oldest.length + value.normalized.length + value.lower.length
+        excerptCache.delete(oldest)
+      }
+      excerptCache.set(text, cached)
+      excerptCharacters += size
+    }
+  }
+  const { normalized } = cached
+  const index = query.trim() ? cached.lower.indexOf(query.trim().toLocaleLowerCase()) : -1
   const from = index > 32 ? Math.max(0, index - 16) : 0
   return (from ? '…' : '') + normalized.slice(from, from + limit) + (normalized.length > from + limit ? '…' : '')
 }

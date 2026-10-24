@@ -71,11 +71,11 @@
 .tw-overview-track { flex: 1; position: relative; cursor: crosshair; touch-action: none; border-radius: 3px; overflow: hidden; }
 .tw-overview-track svg { width: 100%; height: 36px; display: block; }
 .tw-overview-rule { stroke: var(--tw-grid); stroke-width: .6; }
-.tw-overview-track rect { fill: var(--tw-model); }
-.tw-overview-track rect[data-activity='tool'] { fill: var(--tw-tool); }
-.tw-overview-track rect[data-activity='input'] { fill: var(--tw-muted); }
-.tw-overview-track rect[data-activity='nested'] { fill: var(--tw-handoff); }
-.tw-overview-track rect[data-activity='error'] { fill: var(--tw-red); }
+.tw-overview-track [data-activity] { fill: var(--tw-model); }
+.tw-overview-track [data-activity='tool'] { fill: var(--tw-tool); }
+.tw-overview-track [data-activity='input'] { fill: var(--tw-muted); }
+.tw-overview-track [data-activity='nested'] { fill: var(--tw-handoff); }
+.tw-overview-track [data-activity='error'] { fill: var(--tw-red); }
 .tw-overview-shade { pointer-events: none; position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--tw-bg) 76%, transparent); }
 .tw-overview-window { position: absolute; top: 0; bottom: 0; border: 1px solid color-mix(in srgb, var(--tw-accent) 45%, transparent); border-radius: 3px; pointer-events: none; }
 .tw-overview-window i { position: absolute; width: 3px; height: 12px; top: 10px; background: var(--tw-accent); border-radius: 2px; left: -1px; }

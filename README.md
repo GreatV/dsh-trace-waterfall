@@ -74,6 +74,8 @@ python3 -m http.server 3468 --bind 127.0.0.1 --directory dist/preview
 ## Usage
 
 - **Zoom**: drag across the overview to select a range; double-click to reset. The target icon on a turn focuses it.
+- **Live following**: running sessions open at the bottom. New rows stay in view while you remain there; scrolling up, searching, filtering errors, focusing a turn, or opening a summary pauses following. Scroll back to the bottom to resume. Historical sessions open at the top.
+- **Stable live axis**: the global view reserves space ahead of the latest call and expands in rounded blocks. Completed bars stay fixed between expansions; when the session ends, the axis fits the recorded end time. Manual zoom and turn focus keep their selected range.
 - **Search**: Ctrl/Cmd+F. Matches in names, arguments, prompts, and outputs are highlighted.
 - **Errors only**: lists failed operations with their parent context. A recovered failure adds an error badge to its turn instead of marking the whole turn red.
 - **Escape** closes the summary or details, or clears filters.

@@ -8,8 +8,9 @@ import { Highlight } from './TraceDetails.tsx'
 import { TraceIcon, spanIcon, spanTone } from './icons.tsx'
 import type { TraceTranslate } from './locales.ts'
 import type { ActivitySegment, TimeAxis, TimeWindow } from './timeline.ts'
-import { activityKind, intervalPosition } from './timeline.ts'
+import { intervalPosition } from './timeline.ts'
 import { compositeLayout } from './timeline-layout.ts'
+import { overviewPath, overviewRuns } from './overview.ts'
 
 export const ROW_HEIGHT = 28
 export const AXIS_HEIGHT = 30
@@ -30,7 +31,7 @@ export function TraceRowView({ row, index, axis, window, trackWidth, segments, n
   const label = spanLabel(span, t), content = useMemo(() => spanSummary(span, query), [span, query])
   const position = intervalPosition(axis, window, span.start ?? span.anchor, span.end ?? now)
   const instant = ['message', 'context', 'system'].includes(span.kind) && (span.start === null || span.start === span.end)
-  const painted = hasChildren ? compositeLayout(segments, axis, window, trackWidth) : []
+  const painted = useMemo(() => hasChildren ? compositeLayout(segments, axis, window, trackWidth) : [], [hasChildren, segments, axis, window, trackWidth])
   const spanDuration = compactDuration(span.start === null ? null : (span.end ?? now) - span.start)
   const tokens = totalTokens(span.usage)
   const matches = query.trim().toLocaleLowerCase()
@@ -73,7 +74,7 @@ export function Overview({ model, axis, window, change, reset, t, now }: {
 }) {
   const drag = useRef<{ start: number; x: number } | null>(null)
   const lanes = ['inputLane', 'modelLane', 'toolLane'] as const
-  const bars = model.spans.filter(span => span.kind !== 'turn')
+  const layers = useMemo(() => overviewRuns(model).map(run => ({ run, path: run.running ? null : overviewPath(run, axis, 0) })), [model, axis])
   return <div className="tw-overview"><div className="tw-overview-labels">{lanes.map(lane => <span key={lane}>{t(lane)}</span>)}</div>
     <div className="tw-overview-track" role="group" aria-label={t('overview')} tabIndex={0} title={t('overviewHint')}
       onDoubleClick={reset} onKeyDown={event => { if (event.key === 'Escape' || event.key === 'Home') reset() }}
@@ -91,12 +92,7 @@ export function Overview({ model, axis, window, change, reset, t, now }: {
       }} onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}>
       <svg viewBox="0 0 1000 36" preserveAspectRatio="none" aria-hidden="true">
         {[12, 24].map(y => <path key={y} d={`M0 ${y}H1000`} className="tw-overview-rule" />)}
-        {bars.map(span => {
-          const x = axis.project(span.start ?? span.anchor) / axis.length * 1000
-          const end = axis.project(span.end ?? now) / axis.length * 1000
-          const lane = span.kind === 'llm' || span.kind === 'compaction' ? 1 : span.kind === 'tool' ? 2 : 0
-          return <rect key={span.id} x={x} y={lane * 12 + 3} width={Math.max(1.2, end - x)} height="6" rx="1.5" data-activity={activityKind(span)} />
-        })}
+        {layers.map(({ run, path }, index) => <path key={index} d={path ?? overviewPath(run, axis, now)} data-activity={run.kind} />)}
       </svg>
       <div className="tw-overview-shade" style={{ width: `${window.from / axis.length * 100}%` }} />
       <div className="tw-overview-shade" style={{ left: `${window.to / axis.length * 100}%`, right: 0 }} />
@@ -107,7 +103,7 @@ export function Overview({ model, axis, window, change, reset, t, now }: {
 }
 
 export function Handoffs({ rows, axis, window, start, end }: { rows: readonly TraceRow[]; axis: TimeAxis; window: TimeWindow; start: number; end: number }) {
-  const indexes = new Map(rows.map((row, index) => [row.span.id, index]))
+  const indexes = useMemo(() => new Map(rows.map((row, index) => [row.span.id, index])), [rows])
   return <div className="tw-handoffs"><svg width="100%" height={rows.length * ROW_HEIGHT} viewBox={`0 0 100 ${rows.length * ROW_HEIGHT}`} preserveAspectRatio="none" aria-hidden="true">
     {rows.slice(start, end).map(({ span }, offset) => {
       const parent = span.parentId ? indexes.get(span.parentId) : undefined

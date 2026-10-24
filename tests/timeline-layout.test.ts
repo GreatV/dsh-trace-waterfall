@@ -31,6 +31,7 @@ describe('timeline presentation layout', () => {
     expect(timelineTicks(axis, withLeadIn, axis.unproject(withLeadIn.from), 620)[0]?.label).toBe('0s')
     const full = timelineTicks(axis, { from: 0, to: axis.length }, BASE, 620)
     expect(full.map(tick => tick.label)).toContain('5h')
+    expect(full.map(tick => tick.label)).toEqual(['0s', '1m', '5h'])
     expect(full.every(tick => {
       const time = axis.unproject(tick.left / 100 * axis.length)
       return time <= BASE + 90_200 || time >= BASE + 18_000_000
