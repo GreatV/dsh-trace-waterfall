@@ -3,7 +3,9 @@ import { readFile, readdir, mkdir, symlink, lstat, readlink, unlink, writeFile, 
 import { resolve, dirname, relative } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
-const checkout = resolve(process.argv[2] ?? process.env.DSH_REPO ?? '../deepseek-harness')
+const source = process.argv[2] ?? process.env.DSH_REPO
+if (!source) throw new Error('Pass the DeepSeek Harness checkout: npm run link:dsh -- <dsh-checkout>, or set DSH_REPO.')
+const checkout = resolve(source)
 const paths = {}
 let linked = 0
 async function linkPackage(directory) {

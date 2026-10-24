@@ -43,32 +43,33 @@ Do not enable both trajectory providers at once; they own the same view.
 
 ## Develop
 
-Requires a built DeepSeek Harness checkout.
+Requires a built DeepSeek Harness checkout. Point `DSH_REPO` at it:
 
 ```sh
+export DSH_REPO=<path-to-deepseek-harness>
 npm ci
-npm run link:dsh -- ../deepseek-harness
+npm run link:dsh
 npm run build
 npm test
 ```
 
-`link:dsh` links the local DSH packages and generates TypeScript paths; rerun it after reinstalling dependencies or switching checkouts.
+`link:dsh` links the DSH packages and generates TypeScript paths; rerun it after reinstalling dependencies or switching checkouts.
 
 The built `lib/` is committed so that GitHub installs need no build step. Run `npm run build` and commit `lib/` together with source changes.
 
-To install a local checkout instead of the GitHub version, run `dsh plugin --profile web add .` from this directory.
+To install your working copy instead of the GitHub version, run `dsh plugin --profile web add .` from the repository root.
 
-To try the plugin without installing it, run from the DSH repository:
+To try the plugin without installing it, run from the DSH checkout:
 
 ```sh
-pnpm dsh --patch ../dsh-trace-waterfall/cordis.source.patch.yml --no-open
+pnpm dsh --patch <path-to-this-repository>/cordis.source.patch.yml --no-open
 ```
 
 For a preview with deterministic test data:
 
 ```sh
 node scripts/build-preview.mjs
-python3 -m http.server 3468 --bind 127.0.0.1 --directory .local/preview
+python3 -m http.server 3468 --bind 127.0.0.1 --directory dist/preview
 ```
 
 ## Usage
