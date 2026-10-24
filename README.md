@@ -21,13 +21,17 @@ A DeepSeek Harness plugin that replaces the trajectory view with a trace waterfa
 
 ## Install
 
-Requires Node 24.9+. Targets DSH **0.2.1-rc.3**; DSH's plugin APIs are pre-stable.
+Requires Node 24.9+ and pnpm 11 on `PATH` (`dsh plugin` uses pnpm; pnpm 10 fails with `ERR_PNPM_ADDING_TO_ROOT`). Targets DSH **0.2.1-rc.3**; DSH's plugin APIs are pre-stable.
+
+Install from GitHub:
 
 ```sh
 dsh plugin --profile web add github:greatv/dsh-trace-waterfall
 ```
 
-The bundle's `cordis.patch.yml` disables `ui-trajectory` and adds `trace-waterfall`. The view ID stays `trajectory`, so existing view preferences and tool-inspection links keep working. Reload the browser after installing.
+The bundle's `cordis.patch.yml` disables `ui-trajectory` and adds `trace-waterfall`. The view ID stays `trajectory`, so existing view preferences and tool-inspection links keep working. Restart DSH Web or reload the browser after installing.
+
+To update to the latest commit, run the same `add` command again.
 
 To restore DSH's original trace:
 
