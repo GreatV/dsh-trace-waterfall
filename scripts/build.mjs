@@ -10,5 +10,5 @@ const client = await build({
   target: 'es2022', jsx: 'automatic', write: false, external: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
   loader: { '.css': 'text' },
 })
-await writeFile('lib/client.js', `window.__ModuleLoader__.load({ id: ${JSON.stringify(pkg.name)}, factory(require) {\nvar module = { exports: {} }; var exports = module.exports;\n${client.outputFiles[0].text}\nreturn module.exports;\n} });\n`)
+await writeFile('lib/client.js', `window.__ModuleLoader__.load({ id: ${JSON.stringify(pkg.name)}, factory(require) {\nvar module = { exports: {} }; var exports = module.exports;\n${client.outputFiles[0].text.replace(/^\/\/ \.\.\/.*\n/gm, '')}\nreturn module.exports;\n} });\n`)
 console.log('Built lib/index.js and lib/client.js')
