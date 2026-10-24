@@ -43,12 +43,11 @@ Do not enable both trajectory providers at once; they own the same view.
 
 ## Develop
 
-Requires a built DeepSeek Harness checkout. Point `DSH_REPO` at it:
+Requires a built DeepSeek Harness checkout:
 
 ```sh
-export DSH_REPO=<path-to-deepseek-harness>
 npm ci
-npm run link:dsh
+npm run link:dsh -- <path-to-deepseek-harness>
 npm run build
 npm test
 ```
