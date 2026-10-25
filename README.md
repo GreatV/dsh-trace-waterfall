@@ -9,7 +9,9 @@ A DeepSeek Harness plugin that replaces the trajectory view with a trace waterfa
 
 ## Video
 
-[![Watch the 100-second introduction](docs/video-poster.jpg)](https://github.com/GreatV/dsh-trace-waterfall/releases/download/v0.1.0/dsh-trace-waterfall-intro.mp4)
+https://github.com/user-attachments/assets/12101e04-fbdf-4a36-8b71-c1e85642b70f
+
+
 
 A 100-second tour: the built-in trajectory view for comparison, the main interactions, and a real agent run recorded live.
 
