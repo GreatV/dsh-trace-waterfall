@@ -7,6 +7,12 @@ A DeepSeek Harness plugin that replaces the trajectory view with a trace waterfa
 - Model bars split time to first token from decoding.
 - Click a row or bar for an anchored summary, then open full details for complete input, output, timing, and metadata.
 
+## Video
+
+[![Watch the 100-second introduction](docs/video-poster.jpg)](https://github.com/GreatV/dsh-trace-waterfall/releases/download/v0.1.0/dsh-trace-waterfall-intro.mp4)
+
+A 100-second tour: the built-in trajectory view for comparison, the main interactions, and a real agent run recorded live.
+
 ## Screenshots
 
 ![Expanded session in the light theme](docs/screenshots/light-expanded.png)
