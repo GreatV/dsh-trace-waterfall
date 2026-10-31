@@ -32,7 +32,7 @@ Requires Node 24.9+ and pnpm 11 on `PATH` (`dsh plugin` uses pnpm; pnpm 10 fails
 Install from GitHub:
 
 ```sh
-dsh plugin --profile web add github:greatv/dsh-trace-waterfall
+dsh plugin --profile web add github:omdsh-dev/dsh-trace-waterfall
 ```
 
 The bundle's `cordis.patch.yml` disables `ui-trajectory` and adds `trace-waterfall`. The view ID stays `trajectory`, so existing view preferences and tool-inspection links keep working. Restart DSH Web or reload the browser after installing.
