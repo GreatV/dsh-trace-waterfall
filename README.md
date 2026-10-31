@@ -27,7 +27,7 @@ A 100-second tour: the built-in trajectory view for comparison, the main interac
 
 ## Install
 
-Requires Node 24.9+ and pnpm 11 on `PATH` (`dsh plugin` uses pnpm; pnpm 10 fails with `ERR_PNPM_ADDING_TO_ROOT`). Targets DSH **0.2.1-rc.3**; DSH's plugin APIs are pre-stable.
+Requires Node 24.9+ and pnpm 11 on `PATH` (`dsh plugin` uses pnpm; pnpm 10 fails with `ERR_PNPM_ADDING_TO_ROOT`). Tested with DSH **0.2.1-rc.5** and the 0.2.2-alpha line (master at `ce7073d`); DSH's plugin APIs are pre-stable.
 
 Install from GitHub:
 
@@ -49,7 +49,7 @@ Do not enable both trajectory providers at once; they own the same view.
 
 ## Develop
 
-Requires a built DeepSeek Harness checkout:
+Requires a built DeepSeek Harness checkout of `master` or `dsh-v0.2.2-alpha.2` and later. The 0.2.1 release line still runs the plugin, but `tsc` fails there because the PTC event types live in `@deepseek-ai/dsh-tools` instead of `@deepseek-ai/dsh-tool-executor-ptc`.
 
 ```sh
 npm ci
