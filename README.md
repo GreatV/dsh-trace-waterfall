@@ -9,7 +9,7 @@ A DeepSeek Harness plugin that replaces the trajectory view with a trace waterfa
 
 ## Video
 
-https://github.com/user-attachments/assets/12101e04-fbdf-4a36-8b71-c1e85642b70f
+https://github.com/user-attachments/assets/fe12bc0d-32b7-4761-8996-d7ae5887637a
 
 A 100-second tour: the built-in trajectory view for comparison, the main interactions, and a real agent run recorded live.
 
